@@ -1,0 +1,2 @@
+# yolov3-android-tflite
+这个工程实现了在android中使用tflite实现yolov-tiny,我的tensorflow版本是tfnightly1.1320181224
