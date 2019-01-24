@@ -1,7 +1,0 @@
-towercrane
-pushdozer
-motocrane
-smog
-digger
-pumper
-fire

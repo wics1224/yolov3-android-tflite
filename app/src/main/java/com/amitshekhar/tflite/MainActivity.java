@@ -1,5 +1,8 @@
 package com.amitshekhar.tflite;
 
+import android.content.ContentUris;
+import android.content.Intent;
+import android.database.Cursor;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
@@ -7,118 +10,79 @@ import android.graphics.Color;
 import android.graphics.Matrix;
 import android.graphics.Paint;
 import android.graphics.RectF;
+import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
+import android.provider.DocumentsContract;
+import android.provider.MediaStore;
 import android.support.v7.app.AppCompatActivity;
+import android.text.TextUtils;
 import android.text.method.ScrollingMovementMethod;
+import android.util.Log;
 import android.view.View;
 import android.widget.Button;
 import android.widget.ImageView;
 import android.widget.TextView;
 
-import com.wonderkiln.camerakit.CameraKitError;
-import com.wonderkiln.camerakit.CameraKitEvent;
-import com.wonderkiln.camerakit.CameraKitEventListener;
-import com.wonderkiln.camerakit.CameraKitImage;
-import com.wonderkiln.camerakit.CameraKitVideo;
-import com.wonderkiln.camerakit.CameraView;
-
+import java.io.FileNotFoundException;
 import java.util.ArrayList;
-import java.util.LinkedList;
-import java.util.List;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
 
 public class MainActivity extends AppCompatActivity {
 
-    private static final String MODEL_PATH = "yolo_pb.tflite";
-    private static final String LABEL_PATH = "labels.txt";
-    public static final int INPUT_SIZE = 416;
-
-    private TensorFlowImageClassifier classifier;
+    private Classifier classifier;
 
     private Executor executor = Executors.newSingleThreadExecutor();
     private TextView textViewResult;
-    private Button btnDetectObject, btnToggleCamera;
-    //private ImageView imageViewResult;
-    //private CameraView cameraView;
+    private Button btnDetectObject;
     private Bitmap resized_image;
     private Handler mHandler = new Handler();
     private ImageView mContentView;
+
+    public static final int CHOOSE_PHOTO = 2;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
-        //cameraView = findViewById(R.id.cameraView);
-        //imageViewResult = findViewById(R.id.imageViewResult);
         textViewResult = findViewById(R.id.textViewResult);
         textViewResult.setMovementMethod(new ScrollingMovementMethod());
 
-        btnToggleCamera = findViewById(R.id.btnToggleCamera);
         btnDetectObject = findViewById(R.id.btnDetectObject);
-        mContentView = (ImageView) findViewById(R.id.content);
-
-        /*cameraView.addCameraKitListener(new CameraKitEventListener() {
-            @Override
-            public void onEvent(CameraKitEvent cameraKitEvent) {
-
-            }
-
-            @Override
-            public void onError(CameraKitError cameraKitError) {
-
-            }
-
-            @Override
-            public void onImage(CameraKitImage cameraKitImage) {
-
-                Bitmap bitmap = cameraKitImage.getBitmap();
-
-                bitmap = Bitmap.createScaledBitmap(bitmap, INPUT_SIZE, INPUT_SIZE, false);
-
-                imageViewResult.setImageBitmap(bitmap);
-
-                *//*final List<Classifier.Recognition> results = *//*classifier.recognizeImage(bitmap);
-
-                //textViewResult.setText(results.toString());
-
-            }
-
-            @Override
-            public void onVideo(CameraKitVideo cameraKitVideo) {
-
-            }
-        });
-
-        btnToggleCamera.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                cameraView.toggleFacing();
-            }
-        });
-
         btnDetectObject.setOnClickListener(new View.OnClickListener() {
             @Override
-            public void onClick(View v) {
-                cameraView.captureImage();
+            public void onClick(View view) {
+                Intent intent = new Intent("android.intent.action.GET_CONTENT");
+                intent.setType("image/*");
+                startActivityForResult(intent,CHOOSE_PHOTO);//打开相册
             }
         });
-
-        Bitmap bitmap = cameraKitImage.getBitmap();*/
+        mContentView = (ImageView) findViewById(R.id.content);
 
         initTensorFlowAndLoadModel();
 
-        new Thread(new Runnable() {
-            @Override
-            public void run() {
-                Bitmap bitmap = BitmapFactory.decodeFile("/sdcard/detect0141538.jpg");
+    }
 
-                resized_image = processBitmap(bitmap,INPUT_SIZE);
+    private class DetectThread extends Thread{
+        private String mImagePath;
 
-                //imageViewResult.setImageBitmap(resized_image);
+        public DetectThread(String path) {
+            mImagePath = path;
+        }
 
-                ArrayList<TensorFlowImageClassifier.YoloRecognition> results = classifier.yoloRecognizeImage(resized_image);
+        @Override
+        public void run() {
+            if (!TextUtils.isEmpty(mImagePath)) {
+                Log.d("wangmin", "start detect, input size: " + classifier.getInputSize());
+                Bitmap bitmap = BitmapFactory.decodeFile(mImagePath);
+
+                resized_image = processBitmap(bitmap,classifier.getInputSize());
+
+                ArrayList<Classifier.Recognition> results = null;
+
+                results = classifier.RecognizeImage(resized_image);
+
                 resized_image = Bitmap.createBitmap(resized_image);
                 final Canvas canvas = new Canvas(resized_image);
                 final Paint paint = new Paint();
@@ -126,7 +90,7 @@ public class MainActivity extends AppCompatActivity {
                 paint.setStyle(Paint.Style.STROKE);
                 paint.setStrokeWidth(2.0f);
 
-                for (final TensorFlowImageClassifier.YoloRecognition result : results) {
+                for (final Classifier.Recognition result : results) {
                     final RectF location = result.getLocation();
                     if (location != null && result.getConfidence() >= 0.1) {
                         canvas.drawRect(location, paint);
@@ -139,9 +103,10 @@ public class MainActivity extends AppCompatActivity {
                         mContentView.setImageBitmap(resized_image);
                     }
                 });
-            }
-        }).start();
 
+                Log.d("wangmin", "detect end");
+            }
+        }
     }
 
     /**
@@ -225,24 +190,6 @@ public class MainActivity extends AppCompatActivity {
 
     }
 
-    public static float[] normalizeBitmap(Bitmap source,int size,float mean,float std){
-
-        float[] output = new float[size * size * 3];
-
-        int[] intValues = new int[source.getHeight() * source.getWidth()];
-
-        source.getPixels(intValues, 0, source.getWidth(), 0, 0, source.getWidth(), source.getHeight());
-        for (int i = 0; i < intValues.length; ++i) {
-            final int val = intValues[i];
-            output[i * 3] = (((val >> 16) & 0xFF) - mean)/std;
-            output[i * 3 + 1] = (((val >> 8) & 0xFF) - mean)/std;
-            output[i * 3 + 2] = ((val & 0xFF) - mean)/std;
-        }
-
-        return output;
-
-    }
-
     @Override
     protected void onResume() {
         super.onResume();
@@ -271,11 +218,7 @@ public class MainActivity extends AppCompatActivity {
             @Override
             public void run() {
                 try {
-                    classifier = TensorFlowImageClassifier.create(
-                            getAssets(),
-                            MODEL_PATH,
-                            LABEL_PATH,
-                            INPUT_SIZE);
+                    classifier = new Yolov3Classifier(getAssets());
                     makeButtonVisible();
                 } catch (final Exception e) {
                     throw new RuntimeException("Error initializing TensorFlow!", e);
@@ -291,5 +234,59 @@ public class MainActivity extends AppCompatActivity {
                 btnDetectObject.setVisibility(View.VISIBLE);
             }
         });
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        switch (requestCode) {
+            case CHOOSE_PHOTO:
+                if (resultCode == RESULT_OK){
+                    handleImageOnKitKat(data);
+                }
+                break;
+            default:
+                break;
+        }
+    }
+
+    private void handleImageOnKitKat(Intent data){
+        String imagePath = null;
+        Uri uri = data.getData();
+        if (DocumentsContract.isDocumentUri(MainActivity.this,uri)){
+            //如果是document类型的Uri,则通过document id处理
+            String docId = DocumentsContract.getDocumentId(uri);
+            if ("com.android.providers.media.documents".equals(uri.getAuthority())){
+                String id = docId.split(":")[1];//解析出数字格式的id
+                String selection = MediaStore.Images.Media._ID + "=" + id;
+                imagePath = getImagePath(MediaStore.Images.Media.EXTERNAL_CONTENT_URI,selection);
+            }else if ("com.android.providers.downloads.documents".equals(uri.getAuthority())){
+                Uri contentUri = ContentUris.withAppendedId(Uri.parse("content://downloads/public_downloads"),Long.valueOf(docId));
+                imagePath = getImagePath(contentUri,null);
+            }
+        }else if ("content".equalsIgnoreCase(uri.getScheme())){
+            //如果是content类型的Uri，则使用普通方式处理
+            imagePath = getImagePath(uri,null);
+        }else if ("file".equalsIgnoreCase(uri.getScheme())){
+            //如果是file类型的Uri，直接获取图片路径即可
+            imagePath = uri.getPath();
+        }
+
+        Log.d("wangmin", "get Image path: " + imagePath);
+        if (!TextUtils.isEmpty(imagePath)) {
+            new DetectThread(imagePath).start();
+        }
+    }
+
+    private String getImagePath(Uri uri,String selection){
+        String path = null;
+        //通过Uri和selection来获取真实的图片路径
+        Cursor cursor = getContentResolver().query(uri,null,selection,null,null);
+        if (cursor != null){
+            if (cursor.moveToFirst()){
+                path = cursor.getString(cursor.getColumnIndex(MediaStore.Images.Media.DATA));
+            }
+            cursor.close();
+        }
+        return path;
     }
 }
